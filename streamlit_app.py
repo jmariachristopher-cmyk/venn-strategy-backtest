@@ -86,7 +86,7 @@ def fetch_all_history(token, progress_cb=None):
     return df.sort_values("datetime").drop_duplicates(subset="datetime").reset_index(drop=True)
 
 
-def run_backtest(df, capital, risk_pct, max_trades_per_day, rr_mult):
+def run_backtest(df, capital, risk_pct, max_trades_per_day, rr_mult, stop_mult=1.0):
     df = compute_indicators(df)
     df, diagnostics = generate_sets(df)
     df["time"] = df["datetime"].dt.time
@@ -127,7 +127,7 @@ def run_backtest(df, capital, risk_pct, max_trades_per_day, rr_mult):
                 and SESSION_START <= row["time"] <= SESSION_END
                 and row["signal"] in ("long", "short") and not pd.isna(row["atr14"])):
             entry_price = row["close"]
-            stop_dist = max(row["atr14"], entry_price * 0.0005)
+            stop_dist = max(row["atr14"], entry_price * 0.0005) * stop_mult
             if row["signal"] == "long":
                 sl, target = entry_price - stop_dist, entry_price + stop_dist * rr_mult
             else:
@@ -171,7 +171,18 @@ token = st.sidebar.text_input("Upstox Access Token", type="password",
 capital = st.sidebar.number_input("Starting Capital (INR)", value=1_000_000, step=50_000)
 risk_pct = st.sidebar.slider("Risk per trade (%)", 0.25, 3.0, 1.0, 0.25) / 100
 max_trades = st.sidebar.slider("Max trades per day", 1, 6, 3)
-rr_mult = st.sidebar.slider("Reward:Risk multiple", 1.0, 3.0, 1.75, 0.25)
+stop_mult = st.sidebar.slider("Stop distance (x ATR)", 0.5, 3.0, 1.0, 0.25,
+                               help="Wider stop = fewer stop-outs = higher win rate, but bigger loss per losing trade.")
+rr_mult = st.sidebar.slider("Target distance (x stop, i.e. reward:risk)", 0.15, 3.0, 1.75, 0.05,
+                             help="Smaller target = hit more easily = higher win rate, but smaller win per winning trade.")
+
+breakeven_wr = 1 / (1 + rr_mult) * 100
+st.sidebar.caption(
+    f"⚖️ At reward:risk = {rr_mult:.2f}, breakeven win rate ≈ **{breakeven_wr:.0f}%**. "
+    f"Win rate above this with enough sample size means positive expectancy; "
+    f"win rate below it means the strategy loses money even though it 'wins often' or 'wins big.' "
+    f"A high win rate at a very low reward:risk can still be flat or negative after costs."
+)
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -200,7 +211,7 @@ with tab_backtest:
                          "(Upstox tokens expire daily).")
             else:
                 st.success(f"Loaded {len(df):,} candles: {df['datetime'].min()} → {df['datetime'].max()}")
-                trades, equity, diagnostics = run_backtest(df, capital, risk_pct, max_trades, rr_mult)
+                trades, equity, diagnostics = run_backtest(df, capital, risk_pct, max_trades, rr_mult, stop_mult)
 
                 if not diagnostics["volume_available"]:
                     st.warning(
@@ -235,10 +246,20 @@ with tab_backtest:
 
                     c1, c2, c3, c4, c5 = st.columns(5)
                     c1.metric("Total Trades", len(trades))
-                    c2.metric("Win Rate", f"{win_rate:.1f}%")
-                    c3.metric("Profit Factor", f"{profit_factor:.2f}")
+                    c2.metric("Win Rate", f"{win_rate:.1f}%",
+                              delta=f"{win_rate - breakeven_wr:+.1f}pp vs breakeven", delta_color="normal")
+                    c3.metric("Profit Factor", f"{profit_factor:.2f}",
+                              help="Below 1.0 = losing strategy regardless of win rate. Above ~1.3 is generally considered meaningful before costs.")
                     c4.metric("Total Return", f"{(total_pnl/capital)*100:.1f}%")
                     c5.metric("Max Drawdown", f"{max_dd_pct:.1f}%")
+
+                    if profit_factor < 1.15:
+                        st.warning(
+                            f"Profit factor is {profit_factor:.2f} — close to breakeven. A high win rate alone "
+                            f"({win_rate:.1f}%) doesn't mean this is a good strategy if average wins are small "
+                            f"relative to average losses. This backtest also excludes slippage, brokerage, and "
+                            f"STT, which would push a borderline system like this toward negative in live trading."
+                        )
 
                     st.subheader("Equity Curve")
                     st.line_chart(equity.set_index("datetime")["equity"])
