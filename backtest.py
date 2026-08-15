@@ -101,7 +101,15 @@ def fetch_all_history(token):
 
 def run_backtest(df: pd.DataFrame):
     df = compute_indicators(df)
-    df = generate_sets(df)
+    df, diagnostics = generate_sets(df)
+    if not diagnostics["volume_available"]:
+        print("WARNING: zero volume reported for this instrument (expected for the Nifty index itself, "
+              "since only its futures/options are actually traded). Falling back to VWAP-position-only "
+              "for the V-set. For a genuine volume-confirmed V-set, point INSTRUMENT_KEY at Nifty futures.")
+    print(f"Signal diagnostics: T bull/bear={diagnostics['t_bull_count']}/{diagnostics['t_bear_count']}  "
+          f"M bull/bear={diagnostics['m_bull_count']}/{diagnostics['m_bear_count']}  "
+          f"V bull/bear={diagnostics['v_bull_count']}/{diagnostics['v_bear_count']}  "
+          f"signals={diagnostics['signal_count']}")
     df["time"] = df["datetime"].dt.time
     df["date"] = df["datetime"].dt.date
 

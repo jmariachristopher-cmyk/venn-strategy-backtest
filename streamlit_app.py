@@ -88,7 +88,7 @@ def fetch_all_history(token, progress_cb=None):
 
 def run_backtest(df, capital, risk_pct, max_trades_per_day, rr_mult):
     df = compute_indicators(df)
-    df = generate_sets(df)
+    df, diagnostics = generate_sets(df)
     df["time"] = df["datetime"].dt.time
     df["date"] = df["datetime"].dt.date
 
@@ -140,7 +140,7 @@ def run_backtest(df, capital, risk_pct, max_trades_per_day, rr_mult):
 
         equity_curve.append({"datetime": row["datetime"], "equity": cap})
 
-    return pd.DataFrame(trades), pd.DataFrame(equity_curve)
+    return pd.DataFrame(trades), pd.DataFrame(equity_curve), diagnostics
 
 
 def fetch_intraday(token):
@@ -200,11 +200,29 @@ with tab_backtest:
                          "(Upstox tokens expire daily).")
             else:
                 st.success(f"Loaded {len(df):,} candles: {df['datetime'].min()} → {df['datetime'].max()}")
-                trades, equity = run_backtest(df, capital, risk_pct, max_trades, rr_mult)
+                trades, equity, diagnostics = run_backtest(df, capital, risk_pct, max_trades, rr_mult)
+
+                if not diagnostics["volume_available"]:
+                    st.warning(
+                        "⚠️ This instrument (Nifty **index**) reports zero traded volume in Upstox's "
+                        "data — an index isn't itself traded, only its futures/options are. The "
+                        "Volume/Price-Action set has automatically fallen back to **VWAP-position only** "
+                        "(volume-spike check dropped) so the strategy can still generate signals. "
+                        "For a genuine volume-confirmed V-set, point the instrument at Nifty futures instead."
+                    )
+
+                with st.expander("Signal diagnostics (why did/didn't trades fire?)"):
+                    d1, d2, d3 = st.columns(3)
+                    d1.metric("T bullish / bearish candles", f"{diagnostics['t_bull_count']} / {diagnostics['t_bear_count']}")
+                    d2.metric("M bullish / bearish candles", f"{diagnostics['m_bull_count']} / {diagnostics['m_bear_count']}")
+                    d3.metric("V bullish / bearish candles", f"{diagnostics['v_bull_count']} / {diagnostics['v_bear_count']}")
+                    st.caption(f"T ∩ M ∩ V fired on {diagnostics['signal_count']} candles out of {len(df):,} total.")
 
                 if trades.empty:
                     st.warning("No trades were generated — the T ∩ M ∩ V intersection never fired "
-                               "in this data. Try loosening the RSI thresholds in indicators.py.")
+                               "in this data even after the volume fallback above. Try loosening the "
+                               "RSI thresholds in indicators.py, or check the diagnostics above to see "
+                               "which set is the bottleneck.")
                 else:
                     wins = trades[trades["pnl"] > 0]
                     losses = trades[trades["pnl"] <= 0]
@@ -269,8 +287,14 @@ with tab_live:
 
         if not df.empty and len(df) >= 25:
             df = compute_indicators(df)
-            df = generate_sets(df)
+            df, live_diagnostics = generate_sets(df)
             latest = df.iloc[-1]
+
+            if not live_diagnostics["volume_available"]:
+                st.warning(
+                    "⚠️ Zero volume reported for this instrument (normal for the Nifty index itself) — "
+                    "V-set has fallen back to VWAP-position only, volume-spike check dropped."
+                )
 
             colA, colB, colC = st.columns(3)
             colA.metric("Trend (T)", "Bull" if latest["t_bull"] else "Bear" if latest["t_bear"] else "Neutral")

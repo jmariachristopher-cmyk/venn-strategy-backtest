@@ -139,7 +139,10 @@ def main():
             continue
 
         df = compute_indicators(df)
-        df = generate_sets(df)
+        df, diagnostics = generate_sets(df)
+        if not diagnostics["volume_available"]:
+            print("WARNING: zero volume on this instrument - V-set using VWAP-position only "
+                  "(volume-spike check dropped).", file=sys.stderr)
         latest = df.iloc[-1]
 
         # Only act once per newly closed candle

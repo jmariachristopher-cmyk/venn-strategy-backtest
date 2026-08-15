@@ -40,9 +40,14 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     ], axis=1).max(axis=1)
     df["atr14"] = tr.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
 
-    # VWAP - resets daily
+    # VWAP - resets daily. If an instrument reports zero volume all day (true for the
+    # NSE_INDEX itself - an index isn't traded, only its futures/options are), a real
+    # volume-weighted average is undefined (0/0). Fall back to a simple running average
+    # of typical price for that day instead of leaving VWAP as NaN all session.
     def _vwap(group):
         typical = (group["high"] + group["low"] + group["close"]) / 3
+        if group["volume"].fillna(0).sum() == 0:
+            return typical.expanding().mean()
         cum_vp = (typical * group["volume"]).cumsum()
         cum_vol = group["volume"].cumsum().replace(0, np.nan)
         return cum_vp / cum_vol
@@ -57,10 +62,17 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def generate_sets(df: pd.DataFrame) -> pd.DataFrame:
+def generate_sets(df: pd.DataFrame):
     """
     Adds boolean columns: t_bull, t_bear, m_bull, m_bear, v_bull, v_bear,
     and combined 'signal' column: 'long', 'short', or None.
+
+    Returns (df, diagnostics) where diagnostics is a dict with per-set counts and a
+    'volume_available' flag. NSE_INDEX instruments (e.g. "NSE_INDEX|Nifty 50") report
+    zero volume from Upstox, since an index isn't itself traded - only its futures/options
+    are. If total volume in the dataset is 0, the volume-spike requirement is automatically
+    dropped and V becomes VWAP-position only, so the strategy doesn't silently produce zero
+    trades forever. Switch to a futures instrument key for a genuine volume-confirmed V-set.
     """
     df = df.copy()
 
@@ -70,7 +82,12 @@ def generate_sets(df: pd.DataFrame) -> pd.DataFrame:
     df["m_bull"] = (df["rsi14"] > 60) & (df["rsi_slope"] > 0)
     df["m_bear"] = (df["rsi14"] < 40) & (df["rsi_slope"] < 0)
 
-    vol_ok = df["volume"] > 1.5 * df["vol_avg20"]
+    volume_available = df["volume"].fillna(0).sum() > 0
+    if volume_available:
+        vol_ok = df["volume"] > 1.5 * df["vol_avg20"]
+    else:
+        vol_ok = pd.Series(True, index=df.index)
+
     df["v_bull"] = (df["close"] > df["vwap"]) & vol_ok
     df["v_bear"] = (df["close"] < df["vwap"]) & vol_ok
 
@@ -81,4 +98,15 @@ def generate_sets(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[long_signal, "signal"] = "long"
     df.loc[short_signal, "signal"] = "short"
 
-    return df
+    diagnostics = {
+        "volume_available": volume_available,
+        "t_bull_count": int(df["t_bull"].sum()),
+        "t_bear_count": int(df["t_bear"].sum()),
+        "m_bull_count": int(df["m_bull"].sum()),
+        "m_bear_count": int(df["m_bear"].sum()),
+        "v_bull_count": int(df["v_bull"].sum()),
+        "v_bear_count": int(df["v_bear"].sum()),
+        "signal_count": int(df["signal"].notna().sum()),
+    }
+
+    return df, diagnostics
