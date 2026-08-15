@@ -8,10 +8,17 @@ sets all agree.
 - **V (Volume/Price-Action):** price vs VWAP + candle volume > 1.5x 20-candle average
 
 ## Files
-- `indicators.py` — shared indicator/signal logic (used by both scripts, so backtest and live never drift apart)
-- `backtest.py` — pulls real historical Nifty data from Upstox and simulates the strategy
-- `auto_trade.py` — polls live data and (optionally) places real orders via Upstox
+- `indicators.py` — shared indicator/signal logic (used everywhere, so backtest/live/Streamlit never drift apart)
+- `backtest.py` — CLI version: pulls real historical Nifty data from Upstox and simulates the strategy
+- `auto_trade.py` — CLI version: polls live data and (optionally) places real orders via Upstox, runs continuously via a `while True` loop — meant to run on your own machine/VPS, not inside Streamlit
+- `streamlit_app.py` — web UI version with a Backtest tab, a Live Signal Monitor tab, and an About tab
 - `requirements.txt`
+
+## Deploying streamlit_app.py to streamlit.app (Streamlit Community Cloud)
+1. Push this whole folder to a GitHub repo (all 5 files, including `indicators.py` — the app imports it, so it must sit next to `streamlit_app.py`)
+2. Go to https://share.streamlit.io → "New app" → point it at your repo, branch, and `streamlit_app.py` as the main file
+3. Deploy. You'll paste your Upstox access token into the sidebar each session (it's a password-type input, not stored anywhere) — remember tokens expire daily
+4. **Read the "About / Limitations" tab in the app** — it explains why the Live Signal Monitor tab is fine for watching signals but is not a substitute for `auto_trade.py` running unattended on a server
 
 ## Setup
 ```bash
